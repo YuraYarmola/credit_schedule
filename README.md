@@ -8,3 +8,6 @@ Django Rest Test App
 1. Install requirements.txt <code>pip install -r requirements.txt</code>
 2. Make migrate <code>python manage.py migrate</code>
 3. Run server <code>python manage.py runserver</code>
+
+## Run test 
+<code>python manage.py test</code>

@@ -1,3 +1,6 @@
+from decimal import Decimal
+
+from rest_framework.generics import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -17,24 +20,36 @@ class PaymentScheduleViewSet(APIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def patch(self, request, *args, **kwargs):
-        instance = self.get_object()
+        schedule_id = kwargs.get('pk')
         payment_id = request.data.get('payment_id')
-        amount_reduction = request.data.get('amount_reduction')
+        new_principal = Decimal(request.data.get('principal'))
 
-        payment = instance.payments.get(id=payment_id)
-        payment.principal -= amount_reduction
-        payment.interest = (payment.principal * instance.interest_rate / 100) * instance.periodicity_delta
+        try:
+            schedule = PaymentSchedule.objects.get(id=schedule_id)
+            payment = Payment.objects.get(id=payment_id, schedule=schedule)
+        except (PaymentSchedule.DoesNotExist, Payment.DoesNotExist):
+            return Response({"error": "Schedule or payment not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        outstanding_principal = payment.principal + payment.schedule.amount - new_principal
+        payment.principal = new_principal
+        payment.interest = outstanding_principal * Decimal(schedule.interest_rate) / 100
         payment.save()
 
-        self.recalculate_schedule(instance)
+        self.recalculate_subsequent_payments(schedule, payment)
 
-        return Response(PaymentScheduleSerializer(instance).data, status=status.HTTP_200_OK)
+        serializer = PaymentScheduleSerializer(schedule)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def recalculate_schedule(self, schedule):
-        payments = schedule.payments.all().order_by('date')
-        outstanding_principal = sum([p.principal for p in payments])
+    def recalculate_subsequent_payments(self, schedule, modified_payment):
+        payments = Payment.objects.filter(schedule=schedule, date__gt=modified_payment.date).order_by('date')
+        outstanding_principal = modified_payment.schedule.amount - modified_payment.principal
 
         for payment in payments:
-            payment.interest = (outstanding_principal * schedule.interest_rate / 100) * schedule.periodicity_delta
-            outstanding_principal -= payment.principal
+            interest = outstanding_principal * Decimal(schedule.interest_rate) / 100
+            principal = payment.principal + payment.interest - interest
+            outstanding_principal -= principal
+
+            payment.principal = principal
+            payment.interest = interest
             payment.save()
+
